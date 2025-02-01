@@ -85,7 +85,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         // Get the raw pixel data from the frame
         if let Ok(buffer) = frame.buffer() {
             let buffer_size = (height * stride) as usize;
-            let mut pixels = vec![0u8; buffer_size];
+            let pixels = vec![0u8; buffer_size];
             
             // Create frame data with the buffer size
             let frame_data = FrameData {
