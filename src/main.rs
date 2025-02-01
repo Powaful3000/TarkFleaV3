@@ -4,15 +4,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use windows_capture::{
     capture::GraphicsCaptureApiHandler,
-    frame::{Frame, ImageFormat},
+    frame::Frame,
     graphics_capture_api::InternalCaptureControl,
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
-    frame::Error as FrameError,
 };
 use std::fs::File;
 use std::io::BufWriter;
-use png::Encoder;
 
 #[derive(Clone)]
 struct FrameData {
@@ -124,7 +122,7 @@ lazy_static::lazy_static! {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting capture...");
-    let recorder = FrameRecorder::new(60); // Keep 60 frames in the buffer
+    let recorder = FrameRecorder::new(4); // Keep 60 frames in the buffer
     
     // Store the sender globally for the capture handler
     *GLOBAL_SENDER.lock().unwrap() = recorder.get_sender();
@@ -158,7 +156,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_data.height, 
                 frame_data.pixels.len()
             );
-            
             // Save frame as PNG
             let filename = format!("frame_{}.png", frame_data.timestamp.elapsed().as_millis());
             let file = File::create(&filename).unwrap();
