@@ -87,17 +87,18 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     ) -> Result<(), Self::Error> {
         let width = frame.width();
         let height = frame.height();
-        let stride = width * 4; // RGBA8 format = 4 bytes per pixel
+        // Calculate stride with proper alignment (Windows typically aligns to 32 bits)
+        let stride = ((width * 4 + 3) & !3) as u32; // Align to 4 bytes
 
         // Get the raw pixel data from the frame
         if let Ok(mut frame_buffer) = frame.buffer() {
-            let _buffer_size = (height * stride) as usize;
+            let buffer_size = (height * stride) as usize;
             let pixels = frame_buffer
                 .as_nopadding_buffer()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
                 .to_vec();
 
-            // Create frame data with the buffer size
+            // Create frame data with the actual stride
             let frame_data = FrameData {
                 pixels: Arc::new(pixels),
                 width,
@@ -177,24 +178,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_data.height,
                 frame_data.pixels.len()
             );
-            // Save frame as PNG
-            // let filename = format!("frame_{}.png", frame_data.timestamp.elapsed().as_millis());
+            // Save frame as PNG with correct pixel data access
             let filename = "frame.png";
-
             let file = File::create(&filename).unwrap();
             let w = BufWriter::new(file);
             let mut encoder = png::Encoder::new(w, frame_data.width, frame_data.height);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().unwrap();
-            writer.write_image_data(&frame_data.pixels).unwrap();
-            println!("Saved frame to {}", filename);
+            writer.write_image_data(frame_data.pixels.as_ref()).unwrap();
+            println!("Saved frame to {} with {} bytes", filename, frame_data.pixels.len());
 
-            // Create RGBA image from raw pixels
+            // Create RGBA image from raw pixels with proper data access
             let rgba_image = image::RgbaImage::from_raw(
                 frame_data.width,
                 frame_data.height,
-                frame_data.pixels.as_ref().clone()
+                frame_data.pixels.as_ref().to_vec()
             ).expect("Invalid frame buffer dimensions");
 
             // Convert to grayscale then to 32-bit float format
@@ -251,11 +250,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 template_image,
                 MatchTemplateMethod::SumOfSquaredDifferences,
             );
+            // correct match ~~ 6
+            // main menu ~~ 60
             let result = matcher.wait_for_result().unwrap();
             let extremes = find_extremes(&result);
             println!(
-                "Match found at {:?} with confidence: {}",
-                extremes.max_value_location, extremes.max_value
+                "Captcha Match found at {:?} with confidence: {}",
+                extremes.min_value_location, extremes.min_value
             );
         } else {
             println!("No frame available");
