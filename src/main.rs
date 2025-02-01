@@ -1,8 +1,10 @@
+use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::Arc;
 use std::time::Instant;
+use template_matching::Image;
 use template_matching::{find_extremes, MatchTemplateMethod, TemplateMatcher};
 use tokio::sync::Mutex;
 use windows_capture::{
@@ -12,11 +14,13 @@ use windows_capture::{
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
 };
-use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
-use template_matching::Image;
+use rusty_tesseract::Args;
+use std::collections::HashMap;
+
 
 #[derive(Clone)]
 struct FrameData {
+
     pixels: Arc<Vec<u8>>,
     width: u32,
     height: u32,
@@ -187,31 +191,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(frame_data.pixels.as_ref()).unwrap();
-            println!("Saved frame to {} with {} bytes", filename, frame_data.pixels.len());
+            println!(
+                "Saved frame to {} with {} bytes",
+                filename,
+                frame_data.pixels.len()
+            );
 
             // Create RGBA image from raw pixels with proper data access
             let rgba_image = image::RgbaImage::from_raw(
                 frame_data.width,
                 frame_data.height,
-                frame_data.pixels.as_ref().to_vec()
-            ).expect("Invalid frame buffer dimensions");
+                frame_data.pixels.as_ref().to_vec(),
+            )
+            .expect("Invalid frame buffer dimensions");
 
             // Convert to grayscale then to 32-bit float format
             let frame_luma = DynamicImage::ImageRgba8(rgba_image).to_luma32f();
-            
+
             // Create template matching images and save debug images
             let frame_data_vec = frame_luma.as_raw().to_vec();
-            
+
             // Save frame_image as PNG first
             let frame_image_filename = "frame_image.png";
             let frame_image_file = File::create(&frame_image_filename).unwrap();
             let frame_image_w = BufWriter::new(frame_image_file);
-            let mut frame_image_encoder = png::Encoder::new(frame_image_w, frame_luma.width(), frame_luma.height());
+            let mut frame_image_encoder =
+                png::Encoder::new(frame_image_w, frame_luma.width(), frame_luma.height());
             frame_image_encoder.set_color(png::ColorType::Grayscale);
             frame_image_encoder.set_depth(png::BitDepth::Eight);
             let mut frame_image_writer = frame_image_encoder.write_header().unwrap();
             // Convert f32 data to u8
-            let frame_u8: Vec<u8> = frame_data_vec.iter()
+            let frame_u8: Vec<u8> = frame_data_vec
+                .iter()
                 .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
                 .collect();
             frame_image_writer.write_image_data(&frame_u8).unwrap();
@@ -221,28 +232,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let template_image_filename = "template_image.png";
             let template_image_file = File::create(&template_image_filename).unwrap();
             let template_image_w = BufWriter::new(template_image_file);
-            let mut template_image_encoder = png::Encoder::new(template_image_w, template_width, template_height);
+            let mut template_image_encoder =
+                png::Encoder::new(template_image_w, template_width, template_height);
             template_image_encoder.set_color(png::ColorType::Grayscale);
             template_image_encoder.set_depth(png::BitDepth::Eight);
             let mut template_image_writer = template_image_encoder.write_header().unwrap();
             // Convert f32 data to u8
-            let template_u8: Vec<u8> = template_data.iter()
+            let template_u8: Vec<u8> = template_data
+                .iter()
                 .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
                 .collect();
-            template_image_writer.write_image_data(&template_u8).unwrap();
+            template_image_writer
+                .write_image_data(&template_u8)
+                .unwrap();
             println!("Saved template_image to {}", template_image_filename);
 
             // Now create the images for template matching
-            let frame_image = Image::new(
-                frame_data_vec,
-                frame_luma.width(),
-                frame_luma.height(),
-            );
-            let template_image = Image::new(
-                template_data.clone(),
-                template_width,
-                template_height,
-            );
+            let frame_image = Image::new(frame_data_vec, frame_luma.width(), frame_luma.height());
+            let template_image = Image::new(template_data.clone(), template_width, template_height);
 
             // Perform template matching
             matcher.match_template(
@@ -259,8 +266,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 extremes.min_value_location, extremes.min_value
             );
 
+            if extremes.min_value < 10.0 {
+                println!("Captcha match found");
+                ///////////////// tesseract ocr shit
+                let default_args = Args::default();
 
-            
+                // the default parameters are
+                /*
+                Args {
+                    lang: "eng",
+                    dpi: Some(150),
+                    psm: Some(3),
+                    oem: Some(3),
+                }
+                */
+
+                // fill your own argument struct if needed
+                // Optional arguments are ignored if set to `None`
+                let mut my_args = Args {
+                    //model language (tesseract default = 'eng')
+                    //available languages can be found by running 'rusty_tesseract::get_tesseract_langs()'
+                    lang: "eng".to_string(),
+
+                    //map of config variables
+                    //this example shows a whitelist for the normal alphabet. Multiple arguments are allowed.
+                    //available arguments can be found by running 'rusty_tesseract::get_tesseract_config_parameters()'
+                    config_variables: HashMap::from([(
+                        "tessedit_char_whitelist".into(),
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                    )]),
+                    dpi: Some(150), // specify DPI for input image
+                    psm: Some(6), // define page segmentation mode 6 (i.e. "Assume a single uniform block of text")
+                    oem: Some(3), // define optical character recognition mode 3 (i.e. "Default, based on what is available")
+                };
+
+                ////////////////// get tesseract model output
+                // define parameters
+                let mut my_args = Args {
+                    lang: "eng".to_string(),
+                    config_variables: HashMap::from([(
+                        "tessedit_char_whitelist".into(),
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                    )]),
+                    dpi: Some(150),
+                    psm: Some(6),
+                    oem: Some(3),
+                };
+
+                // string output
+                let output = rusty_tesseract::image_to_string(&frame_image, &my_args).unwrap();
+                println!("The String output is: {:?}", output);
+
+                // image_to_boxes creates a BoxOutput containing the parsed output from Tesseract when using the "makebox" Parameter
+                let box_output = rusty_tesseract::image_to_boxes(&frame_image, &my_args).unwrap();
+                println!(
+                    "The first boxfile symbol is: {}",
+                    box_output.boxes[0].symbol
+                );
+                println!("The full boxfile output is:\n{}", box_output.output);
+
+                // image_to_data creates a DataOutput containing the parsed output from Tesseract when using the "TSV" Parameter
+                let data_output = rusty_tesseract::image_to_data(&frame_image, &my_args).unwrap();
+                let first_text_line = &data_output.data[4];
+                println!(
+                    "The first text is '{}' with confidence {}",
+                    first_text_line.text, first_text_line.conf
+                );
+                println!("The full data output is:\n{}", data_output.output);
+            } else {
+                println!("No captcha match found");
+            }
         } else {
             println!("No frame available");
         }
