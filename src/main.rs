@@ -258,9 +258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Captcha Match found at {:?} with confidence: {}",
                 extremes.min_value_location, extremes.min_value
             );
-
-
-            
+            let captcha_threshold = 25.0;
+            if extremes.min_value < captcha_threshold {
+                println!("Captcha match found!! {}% within threshold", (extremes.min_value / captcha_threshold) * 100.0);
+            }
         } else {
             println!("No frame available");
         }

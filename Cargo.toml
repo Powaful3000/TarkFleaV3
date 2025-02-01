@@ -12,3 +12,7 @@ serde_json = "1.0"
 png = "0.17.10"
 template-matching = { version = "0.2.0", features = ["image"] }
 image = "0.25.5"
+
+[[bin]]
+name = "captcha"
+path = "src/captcha.rs"
