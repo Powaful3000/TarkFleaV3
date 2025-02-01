@@ -10,8 +10,9 @@ use windows_capture::{
     window::Window,
     frame::Error as FrameError,
 };
-use std::fs;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::BufWriter;
+use png::Encoder;
 
 #[derive(Clone)]
 struct FrameData {
@@ -159,6 +160,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_data.height, 
                 frame_data.pixels.len()
             );
+            let file = File::create("frame.png").unwrap();
+            let ref mut w = BufWriter::new(file);
+            let mut encoder = Encoder::new(w, frame_data.width as u32, frame_data.height as u32);
+            encoder.set(png::ColorType::RGBA).set(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&frame_data.pixels).unwrap(); // Save
         } else {
             println!("No frame available");
         }
