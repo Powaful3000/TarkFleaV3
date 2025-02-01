@@ -178,7 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_data.pixels.len()
             );
             // Save frame as PNG
-            let filename = format!("frame_{}.png", frame_data.timestamp.elapsed().as_millis());
+            // let filename = format!("frame_{}.png", frame_data.timestamp.elapsed().as_millis());
+            let filename = "frame.png";
+
             let file = File::create(&filename).unwrap();
             let w = BufWriter::new(file);
             let mut encoder = png::Encoder::new(w, frame_data.width, frame_data.height);
@@ -188,19 +190,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             writer.write_image_data(&frame_data.pixels).unwrap();
             println!("Saved frame to {}", filename);
 
-            let frame_dyn = image::load_from_memory(&frame_data.pixels)
-                .unwrap()
-                .to_luma32f();
+            // Create RGBA image from raw pixels
+            let rgba_image = image::RgbaImage::from_raw(
+                frame_data.width,
+                frame_data.height,
+                frame_data.pixels.as_ref().clone()
+            ).expect("Invalid frame buffer dimensions");
+
+            // Convert to grayscale then to 32-bit float format
+            let frame_luma = DynamicImage::ImageRgba8(rgba_image).to_luma32f();
+            
+            // Create template matching images and save debug images
+            let frame_data_vec = frame_luma.as_raw().to_vec();
+            
+            // Save frame_image as PNG first
+            let frame_image_filename = "frame_image.png";
+            let frame_image_file = File::create(&frame_image_filename).unwrap();
+            let frame_image_w = BufWriter::new(frame_image_file);
+            let mut frame_image_encoder = png::Encoder::new(frame_image_w, frame_luma.width(), frame_luma.height());
+            frame_image_encoder.set_color(png::ColorType::Grayscale);
+            frame_image_encoder.set_depth(png::BitDepth::Eight);
+            let mut frame_image_writer = frame_image_encoder.write_header().unwrap();
+            // Convert f32 data to u8
+            let frame_u8: Vec<u8> = frame_data_vec.iter()
+                .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
+                .collect();
+            frame_image_writer.write_image_data(&frame_u8).unwrap();
+            println!("Saved frame_image to {}", frame_image_filename);
+
+            // Save template_image as PNG
+            let template_image_filename = "template_image.png";
+            let template_image_file = File::create(&template_image_filename).unwrap();
+            let template_image_w = BufWriter::new(template_image_file);
+            let mut template_image_encoder = png::Encoder::new(template_image_w, template_width, template_height);
+            template_image_encoder.set_color(png::ColorType::Grayscale);
+            template_image_encoder.set_depth(png::BitDepth::Eight);
+            let mut template_image_writer = template_image_encoder.write_header().unwrap();
+            // Convert f32 data to u8
+            let template_u8: Vec<u8> = template_data.iter()
+                .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
+                .collect();
+            template_image_writer.write_image_data(&template_u8).unwrap();
+            println!("Saved template_image to {}", template_image_filename);
+
+            // Now create the images for template matching
             let frame_image = Image::new(
-                frame_dyn.as_raw().to_vec(),
-                frame_dyn.width(),
-                frame_dyn.height(),
+                frame_data_vec,
+                frame_luma.width(),
+                frame_luma.height(),
             );
             let template_image = Image::new(
                 template_data.clone(),
                 template_width,
                 template_height,
             );
+
+            // Perform template matching
             matcher.match_template(
                 frame_image,
                 template_image,
