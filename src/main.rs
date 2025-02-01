@@ -1,6 +1,9 @@
-use std::time::Instant;
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::BufWriter;
 use std::sync::Arc;
+use std::time::Instant;
+use template_matching::{find_extremes, MatchTemplateMethod, TemplateMatcher};
 use tokio::sync::Mutex;
 use windows_capture::{
     capture::GraphicsCaptureApiHandler,
@@ -9,8 +12,6 @@ use windows_capture::{
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
 };
-use std::fs::File;
-use std::io::BufWriter;
 
 #[derive(Clone)]
 struct FrameData {
@@ -31,7 +32,7 @@ impl FrameRecorder {
     pub fn new(max_frames: usize) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::channel(32);
         let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(max_frames)));
-        
+
         let buffer_clone = buffer.clone();
         tokio::spawn(async move {
             while let Some(frame) = rx.recv().await {
@@ -42,12 +43,17 @@ impl FrameRecorder {
                 guard.push_back(frame);
             }
         });
-        
-        Self { buffer, max_frames, tx }
+
+        Self {
+            buffer,
+            max_frames,
+            tx,
+        }
     }
 
     pub async fn get_latest(&self) -> Option<FrameData> {
         let guard = self.buffer.lock().await;
+        println!("Buffer size: {}", guard.len());
         guard.back().cloned()
     }
 
@@ -79,15 +85,16 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     ) -> Result<(), Self::Error> {
         let width = frame.width();
         let height = frame.height();
-        let stride = width * 4;  // RGBA8 format = 4 bytes per pixel
-        
+        let stride = width * 4; // RGBA8 format = 4 bytes per pixel
+
         // Get the raw pixel data from the frame
         if let Ok(mut frame_buffer) = frame.buffer() {
-            let buffer_size = (height * stride) as usize;
-            let pixels = frame_buffer.as_nopadding_buffer()
+            let _buffer_size = (height * stride) as usize;
+            let pixels = frame_buffer
+                .as_nopadding_buffer()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
                 .to_vec();
-            
+
             // Create frame data with the buffer size
             let frame_data = FrameData {
                 pixels: Arc::new(pixels),
@@ -96,12 +103,14 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 stride,
                 timestamp: Instant::now(),
             };
-            
-            self.tx.blocking_send(frame_data).unwrap_or_else(|e| println!("Failed to send frame data: {}", e));
+
+            self.tx
+                .blocking_send(frame_data)
+                .unwrap_or_else(|e| println!("Failed to send frame data: {}", e));
         } else {
             println!("Failed to get frame buffer");
         }
-        
+
         Ok(())
     }
 
@@ -123,7 +132,7 @@ lazy_static::lazy_static! {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting capture...");
     let recorder = FrameRecorder::new(4); // Keep 60 frames in the buffer
-    
+
     // Store the sender globally for the capture handler
     *GLOBAL_SENDER.lock().unwrap() = recorder.get_sender();
 
@@ -146,14 +155,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CaptureHandler::start(settings)
     });
 
+    // Create template matcher
+    let mut matcher = TemplateMatcher::new();
+    let template_image = image::load_from_memory(include_bytes!("captcha-template.png"))
+        .unwrap()
+        .to_luma32f();
+
     // Example: Get the latest frame every second
     println!("Entering main loop...");
+
     loop {
         if let Some(frame_data) = recorder.get_latest().await {
             println!(
-                "Got frame: {}x{}, {} bytes", 
-                frame_data.width, 
-                frame_data.height, 
+                "Got frame: {}x{}, {} bytes",
+                frame_data.width,
+                frame_data.height,
                 frame_data.pixels.len()
             );
             // Save frame as PNG
@@ -166,6 +182,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(&frame_data.pixels).unwrap();
             println!("Saved frame to {}", filename);
+
+            let frame_image = image::load_from_memory(&frame_data.pixels)
+                .unwrap()
+                .to_luma32f();
+            matcher.match_template(
+                &frame_image,
+                &template_image,
+                MatchTemplateMethod::SumOfSquaredDifferences,
+            );
+            let result = matcher.wait_for_result().unwrap();
+            let extremes = find_extremes(&result);
+            println!(
+                "Match found at {:?} with confidence: {}",
+                extremes.max_value_location, extremes.max_value
+            );
         } else {
             println!("No frame available");
         }
