@@ -1,42 +1,110 @@
 use std::time::Instant;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use windows_capture::{
     capture::GraphicsCaptureApiHandler,
     frame::{Frame, ImageFormat},
     graphics_capture_api::InternalCaptureControl,
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
+    frame::Error as FrameError,
 };
+use std::fs;
+use std::path::PathBuf;
 
-struct ScreenshotCapture {
-    start_time: Instant,
-    screenshot_path: String,
-    captured: bool,
+#[derive(Clone)]
+struct FrameData {
+    pixels: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
+    stride: u32,
+    timestamp: Instant,
 }
 
-impl GraphicsCaptureApiHandler for ScreenshotCapture {
+struct FrameRecorder {
+    buffer: Arc<Mutex<VecDeque<FrameData>>>,
+    max_frames: usize,
+    tx: tokio::sync::mpsc::Sender<FrameData>,
+}
+
+impl FrameRecorder {
+    pub fn new(max_frames: usize) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(max_frames)));
+        
+        let buffer_clone = buffer.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                let mut guard = buffer_clone.lock().await;
+                if guard.len() >= max_frames {
+                    guard.pop_front();
+                }
+                guard.push_back(frame);
+            }
+        });
+        
+        Self { buffer, max_frames, tx }
+    }
+
+    pub async fn get_latest(&self) -> Option<FrameData> {
+        let guard = self.buffer.lock().await;
+        guard.back().cloned()
+    }
+
+    pub fn get_sender(&self) -> tokio::sync::mpsc::Sender<FrameData> {
+        self.tx.clone()
+    }
+}
+
+struct CaptureHandler {
+    tx: tokio::sync::mpsc::Sender<FrameData>,
+    start_time: Instant,
+}
+
+impl GraphicsCaptureApiHandler for CaptureHandler {
     type Flags = String;
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn new(_: windows_capture::capture::Context<Self::Flags>) -> Result<Self, Self::Error> {
         Ok(Self {
             start_time: Instant::now(),
-            screenshot_path: "tarkov_screenshot.png".to_string(),
-            captured: false,
+            tx: GLOBAL_SENDER.lock().unwrap().clone(),
         })
     }
 
     fn on_frame_arrived(
         &mut self,
         frame: &mut Frame,
-        capture_control: InternalCaptureControl,
+        _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        if !self.captured {
-            frame.save_as_image(&self.screenshot_path, ImageFormat::Png)?;
-            let duration = self.start_time.elapsed();
-            println!("Screenshot captured in: {:.2?}", duration);
-            self.captured = true;
-            capture_control.stop();
+        let width = frame.width();
+        let height = frame.height();
+        let stride = width * 4;  // RGBA8 format = 4 bytes per pixel
+        
+        // Get the raw pixel data from the frame
+        if let Ok(buffer) = frame.buffer() {
+            let buffer_size = (height * stride) as usize;
+            let mut pixels = vec![0u8; buffer_size];
+            
+            // Create frame data with the buffer size
+            let frame_data = FrameData {
+                pixels: Arc::new(pixels),
+                width,
+                height,
+                stride,
+                timestamp: Instant::now(),
+            };
+            
+            // match self.tx.blocking_send(frame_data) {
+            //     Ok(_) => println!("Sent frame data successfully: {} bytes", buffer_size),
+            //     Err(e) => println!("Failed to send frame data: {}", e),
+            // }
+            self.tx.blocking_send(frame_data).unwrap_or_else(|e| println!("Failed to send frame data: {}", e));
+        } else {
+            println!("Failed to get frame buffer");
         }
+        
         Ok(())
     }
 
@@ -46,9 +114,25 @@ impl GraphicsCaptureApiHandler for ScreenshotCapture {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+// Global sender for the capture handler
+lazy_static::lazy_static! {
+    static ref GLOBAL_SENDER: std::sync::Mutex<tokio::sync::mpsc::Sender<FrameData>> = {
+        let (tx, _) = tokio::sync::mpsc::channel(32);
+        std::sync::Mutex::new(tx)
+    };
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting capture...");
+    let recorder = FrameRecorder::new(60); // Keep 60 frames in the buffer
+    
+    // Store the sender globally for the capture handler
+    *GLOBAL_SENDER.lock().unwrap() = recorder.get_sender();
+
     let target_window = Window::from_name("EscapeFromTarkov")
         .map_err(|_| "Failed to find EscapeFromTarkov window")?;
+    println!("Found target window");
 
     let settings = Settings::new(
         target_window,
@@ -58,6 +142,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::new(),
     );
 
-    ScreenshotCapture::start(settings)?;
-    Ok(())
+    // Start capture in a blocking thread
+    println!("Starting capture thread...");
+    let capture_handle = tokio::task::spawn_blocking(move || {
+        println!("Capture thread started");
+        CaptureHandler::start(settings)
+    });
+
+    // Example: Get the latest frame every second
+    println!("Entering main loop...");
+    loop {
+        if let Some(frame_data) = recorder.get_latest().await {
+            println!(
+                "Got frame: {}x{}, {} bytes", 
+                frame_data.width, 
+                frame_data.height, 
+                frame_data.pixels.len()
+            );
+        } else {
+            println!("No frame available");
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
 }
