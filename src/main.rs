@@ -84,9 +84,11 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let stride = width * 4;  // RGBA8 format = 4 bytes per pixel
         
         // Get the raw pixel data from the frame
-        if let Ok(buffer) = frame.buffer() {
+        if let Ok(mut frame_buffer) = frame.buffer() {
             let buffer_size = (height * stride) as usize;
-            let pixels = vec![0u8; buffer_size];
+            let pixels = frame_buffer.as_nopadding_buffer()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .to_vec();
             
             // Create frame data with the buffer size
             let frame_data = FrameData {
@@ -97,10 +99,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 timestamp: Instant::now(),
             };
             
-            // match self.tx.blocking_send(frame_data) {
-            //     Ok(_) => println!("Sent frame data successfully: {} bytes", buffer_size),
-            //     Err(e) => println!("Failed to send frame data: {}", e),
-            // }
             self.tx.blocking_send(frame_data).unwrap_or_else(|e| println!("Failed to send frame data: {}", e));
         } else {
             println!("Failed to get frame buffer");
@@ -160,12 +158,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_data.height, 
                 frame_data.pixels.len()
             );
-            let file = File::create("frame.png").unwrap();
-            let ref mut w = BufWriter::new(file);
-            let mut encoder = Encoder::new(w, frame_data.width as u32, frame_data.height as u32);
-            encoder.set(png::ColorType::RGBA).set(png::BitDepth::Eight);
+            
+            // Save frame as PNG
+            let filename = format!("frame_{}.png", frame_data.timestamp.elapsed().as_millis());
+            let file = File::create(&filename).unwrap();
+            let w = BufWriter::new(file);
+            let mut encoder = png::Encoder::new(w, frame_data.width, frame_data.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().unwrap();
-            writer.write_image_data(&frame_data.pixels).unwrap(); // Save
+            writer.write_image_data(&frame_data.pixels).unwrap();
+            println!("Saved frame to {}", filename);
         } else {
             println!("No frame available");
         }
