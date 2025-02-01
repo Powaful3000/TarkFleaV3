@@ -12,6 +12,8 @@ use windows_capture::{
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
 };
+use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
+use template_matching::Image;
 
 #[derive(Clone)]
 struct FrameData {
@@ -157,9 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create template matcher
     let mut matcher = TemplateMatcher::new();
-    let template_image = image::load_from_memory(include_bytes!("captcha-template.png"))
+    let template_dyn = image::load_from_memory(include_bytes!("captcha-template.png"))
         .unwrap()
         .to_luma32f();
+    let template_data = template_dyn.as_raw().to_vec();
+    let template_width = template_dyn.width();
+    let template_height = template_dyn.height();
 
     // Example: Get the latest frame every second
     println!("Entering main loop...");
@@ -183,12 +188,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             writer.write_image_data(&frame_data.pixels).unwrap();
             println!("Saved frame to {}", filename);
 
-            let frame_image = image::load_from_memory(&frame_data.pixels)
+            let frame_dyn = image::load_from_memory(&frame_data.pixels)
                 .unwrap()
                 .to_luma32f();
+            let frame_image = Image::new(
+                frame_dyn.as_raw().to_vec(),
+                frame_dyn.width(),
+                frame_dyn.height(),
+            );
+            let template_image = Image::new(
+                template_data.clone(),
+                template_width,
+                template_height,
+            );
             matcher.match_template(
-                &frame_image,
-                &template_image,
+                frame_image,
+                template_image,
                 MatchTemplateMethod::SumOfSquaredDifferences,
             );
             let result = matcher.wait_for_result().unwrap();
