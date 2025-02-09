@@ -134,7 +134,7 @@ lazy_static::lazy_static! {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting capture...");
-    let recorder = FrameRecorder::new(4); // Keep 60 frames in the buffer
+    let recorder = FrameRecorder::new(4); // Keep 4 frames in the buffer, reduced for debugging
 
     // Store the sender globally for the capture handler
     *GLOBAL_SENDER.lock().unwrap() = recorder.get_sender();
@@ -166,6 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let template_data = template_dyn.as_raw().to_vec();
     let template_width = template_dyn.width();
     let template_height = template_dyn.height();
+    println!("Template loaded: {}x{}", template_width, template_height); // Log template dimensions
 
     // Example: Get the latest frame every second
     println!("Entering main loop...");
@@ -198,11 +199,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Convert to grayscale then to 32-bit float format
             let frame_luma = DynamicImage::ImageRgba8(rgba_image).to_luma32f();
-            
-            // Create template matching images and save debug images
-            let frame_data_vec = frame_luma.as_raw().to_vec();
-            
-            // Save frame_image as PNG first
+
+            // Save frame_image as PNG first (Grayscale)
             let frame_image_filename = "frame_image.png";
             let frame_image_file = File::create(&frame_image_filename).unwrap();
             let frame_image_w = BufWriter::new(frame_image_file);
@@ -210,14 +208,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame_image_encoder.set_color(png::ColorType::Grayscale);
             frame_image_encoder.set_depth(png::BitDepth::Eight);
             let mut frame_image_writer = frame_image_encoder.write_header().unwrap();
-            // Convert f32 data to u8
-            let frame_u8: Vec<u8> = frame_data_vec.iter()
-                .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
+            // Convert f32 data to u8 for grayscale PNG - Correct conversion
+            let frame_u8: Vec<u8> = frame_luma.as_raw().iter()
+                .map(|&x| (x * 255.0).round().clamp(0.0, 255.0) as u8) // Use round() for better grayscale conversion
                 .collect();
             frame_image_writer.write_image_data(&frame_u8).unwrap();
             println!("Saved frame_image to {}", frame_image_filename);
 
-            // Save template_image as PNG
+            // Save template_image as PNG (Grayscale)
             let template_image_filename = "template_image.png";
             let template_image_file = File::create(&template_image_filename).unwrap();
             let template_image_w = BufWriter::new(template_image_file);
@@ -225,16 +223,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             template_image_encoder.set_color(png::ColorType::Grayscale);
             template_image_encoder.set_depth(png::BitDepth::Eight);
             let mut template_image_writer = template_image_encoder.write_header().unwrap();
-            // Convert f32 data to u8
+            // Convert f32 template data to u8 for grayscale PNG - Correct conversion
             let template_u8: Vec<u8> = template_data.iter()
-                .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
+                .map(|&x| (x * 255.0).round().clamp(0.0, 255.0) as u8) // Use round() for better grayscale conversion
                 .collect();
             template_image_writer.write_image_data(&template_u8).unwrap();
             println!("Saved template_image to {}", template_image_filename);
 
             // Now create the images for template matching
             let frame_image = Image::new(
-                frame_data_vec,
+                frame_luma.as_raw().to_vec(),
                 frame_luma.width(),
                 frame_luma.height(),
             );
@@ -254,13 +252,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // main menu ~~ 60
             let result = matcher.wait_for_result().unwrap();
             let extremes = find_extremes(&result);
-            println!(
-                "Captcha Match found at {:?} with confidence: {}",
-                extremes.min_value_location, extremes.min_value
+            println!( // Detailed logging of matching result
+                "Template Match Result: Min Value Location: {:?}, Min Value: {}, Max Value Location: {:?}, Max Value: {}",
+                extremes.min_value_location, extremes.min_value, extremes.max_value_location, extremes.max_value
             );
             let captcha_threshold = 25.0;
             if extremes.min_value < captcha_threshold {
                 println!("Captcha match found!! {}% within threshold", (extremes.min_value / captcha_threshold) * 100.0);
+            } else {
+                println!("Captcha not matched, min_value {} is above threshold {}", extremes.min_value, captcha_threshold); // Log when no match
             }
         } else {
             println!("No frame available");
