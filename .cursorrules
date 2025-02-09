@@ -1,0 +1,34 @@
+[Include]
+**/Cargo.toml
+**/src/**/*.rs
+
+[Exclude]
+**/target/**
+
+[Context]
+Language = "Rust"
+CodeSnippets = [
+  "#[derive(Debug, Clone)]",
+  "fn main() -> Result<(), Box<dyn Error>> { ... }",
+  "/// Documentation comments"
+]
+Dependencies = "Check Cargo.toml for {{crate}} versions"
+
+[Rules]
+- Prefer immutable bindings (let over let mut)
+- Use Option/Result instead of null/panics
+- Leverage lifetimes explicitly
+- Suggest Clippy lints
+- Follow Rust naming conventions
+- Document public APIs
+- Use lazy_static for global variables
+- Use tokio for async operations
+- Use windows_capture for window capture
+- Use image for image processing
+- Use template_matching for template matching
+- Use tokio::sync::Mutex for thread-safe mutexes
+- Use tokio::sync::mpsc for message passing
+- Use tokio::time::sleep for delays
+- Use tokio::task::spawn_blocking for blocking operations
+- Use tokio::sync::Mutex for thread-safe mutexes
+
