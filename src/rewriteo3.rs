@@ -1,4 +1,4 @@
-// rewrite.rs
+// rewriteo3.rs
 //
 // A complete rewrite and improvement of the Escape From Tarkov Flea Market Bot POC.
 // This file implements a singleton frame recorder that continuously captures screenshots
@@ -141,11 +141,11 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let stride = width * 4; // Bytes per row (RGBA = 4 bytes per pixel).
 
         // Attempt to get the frame's buffer.
-        if let Ok(mut buffer) = frame.buffer() {
+        if let Ok(mut frame_buffer) = frame.buffer() {
             // Create a vector to store the pixel data.
-            let mut pixels = vec![0u8; (stride * height) as usize];
+            let mut pixels = vec![0u8; (stride * height) as usize]; //pre-allocate
             // Copy the frame data into our pixel vector.
-            buffer.copy_to_slice(&mut pixels)?;
+            pixels.copy_from_slice(frame_buffer.as_raw_buffer());
 
             // Create a FrameData struct to hold the frame's information.
             let frame_data = FrameData {

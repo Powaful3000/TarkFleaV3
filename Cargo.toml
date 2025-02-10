@@ -17,3 +17,11 @@ rusty-tesseract = "1.1.9"
 [[bin]]
 name = "captcha"
 path = "src/captcha.rs"
+
+[[bin]]
+name = "rewriteo3"
+path = "src/rewriteo3.rs"
+
+[[bin]]
+name = "rewritegeminift"
+path = "src/rewritegeminift.rs"
